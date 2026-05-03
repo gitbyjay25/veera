@@ -13,6 +13,7 @@ store: dict[str, dict[str, Any]] = {
     "merchant": {},
     "customer": {},
     "trigger": {},
+    "meta": {},      # cross-conversation merchant state (auto_count, etc.)
 }
 
 suppressed: dict[str, str | None] = {}          # suppression_key → expires_at

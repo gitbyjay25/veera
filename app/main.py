@@ -175,8 +175,11 @@ def _resolve_ranked_triggers(requested_ids: list[str]) -> list[dict[str, Any]]:
 
 @app.post("/v1/tick")
 async def tick(body: TickBody) -> dict[str, Any]:
+    # Tick = deterministic only — guarantees <100ms response (judge timeout: 15s)
+    # LLM is reserved for /v1/reply where conversational quality matters most
     actions: list[dict[str, Any]] = []
-    for trigger in _resolve_ranked_triggers(body.available_triggers)[:20]:
+
+    for trigger in _resolve_ranked_triggers(body.available_triggers)[:5]:
         merchant_id = trigger.get("merchant_id")
         merchant_obj = store["merchant"].get(merchant_id)
         merchant = merchant_obj["payload"] if merchant_obj else get_payload("merchant", merchant_id, fallback)
@@ -197,42 +200,39 @@ async def tick(body: TickBody) -> dict[str, Any]:
         if trigger.get("scope") == "customer" and not customer:
             continue
 
-        composed = compose(category, merchant, trigger, customer)
+        # Force deterministic mode for tick — fast, reliable, zero LLM latency
+        composed = compose(category, merchant, trigger, customer, force_deterministic=True)
         if not composed:
             continue
 
         conv_id = conversation_id(trigger)
-        start_conversation(
-            conv_id,
-            {
-                "merchant_id": merchant_id,
-                "customer_id": customer.get("customer_id") if customer else None,
-                "trigger_id": trigger.get("id"),
-                "last_body": composed["body"],
-            },
-        )
+        start_conversation(conv_id, {
+            "merchant_id": merchant_id,
+            "customer_id": customer.get("customer_id") if customer else None,
+            "trigger_id": trigger.get("id"),
+            "last_body": composed["body"],
+        })
         mark_sent(trigger.get("suppression_key"), trigger.get("expires_at"))
-        actions.append(
-            {
-                "conversation_id": conv_id,
-                "merchant_id": merchant_id,
-                "customer_id": customer.get("customer_id") if customer else None,
-                "send_as": composed["send_as"],
-                "trigger_id": trigger.get("id"),
-                "template_name": composed["template_name"],
-                "template_params": composed["template_params"],
-                "body": composed["body"],
-                "cta": composed["cta"],
-                "suppression_key": composed["suppression_key"],
-                "rationale": composed["rationale"],
-                # Debug fields — composer source and profile used
-                "_source": composed.get("_source", "unknown"),
-                "_profile": composed.get("_profile", "unknown"),
-                "_validation_passed": composed.get("_validation_passed", True),
-            }
-        )
+        actions.append({
+            "conversation_id": conv_id,
+            "merchant_id": merchant_id,
+            "customer_id": customer.get("customer_id") if customer else None,
+            "send_as": composed["send_as"],
+            "trigger_id": trigger.get("id"),
+            "template_name": composed["template_name"],
+            "template_params": composed["template_params"],
+            "body": composed["body"],
+            "cta": composed["cta"],
+            "suppression_key": composed["suppression_key"],
+            "rationale": composed["rationale"],
+            "_source": composed.get("_source", "deterministic"),
+            "_profile": composed.get("_profile", "unknown"),
+            "_validation_passed": composed.get("_validation_passed", True),
+        })
 
     return {"actions": actions}
+
+
 
 
 @app.post("/v1/reply")
@@ -246,6 +246,20 @@ async def reply(body: ReplyBody) -> dict[str, Any]:
             "turn_number": body.turn_number,
         },
     )
+
+    # Auto-reply count tracked per merchant across conversations
+    from app.composer import is_auto_reply
+    from app.store import _lock as _store_lock
+    if body.merchant_id and is_auto_reply(body.message):
+        with _store_lock:
+            mc = store["meta"].setdefault(body.merchant_id, {})
+            mc["auto_count"] = mc.get("auto_count", 0) + 1
+            state["auto_count"] = mc["auto_count"]
+    elif body.merchant_id:
+        with _store_lock:
+            store["meta"].setdefault(body.merchant_id, {})["auto_count"] = 0
+        state["auto_count"] = 0
+
     result = reply_action(body.message, state)
     if result.get("action") == "end" and body.merchant_id:
         rationale = result.get("rationale", "").lower()

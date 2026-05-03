@@ -413,9 +413,11 @@ def compose(
     merchant: dict[str, Any],
     trigger: dict[str, Any],
     customer: dict[str, Any] | None = None,
+    force_deterministic: bool = False,
 ) -> dict[str, Any] | None:
     """
     Full 6-step pipeline. Returns composed dict or None if consent blocked.
+    Set force_deterministic=True to skip LLM entirely (used by /v1/tick for speed).
     """
     # Step 1: consent check
     if not consent_allows(trigger, customer):
@@ -442,8 +444,13 @@ def compose(
     }
 
     # Step 5: try LLM (with deterministic as safety net)
-    user_msg = _build_user_message(ctx, profile)
-    composed, source = compose_with_llm(profile.profile_id, user_msg, deterministic)
+    if force_deterministic:
+        # Skip LLM entirely — used by /v1/tick for guaranteed fast response
+        composed, source = deterministic, "deterministic"
+    else:
+        user_msg = _build_user_message(ctx, profile)
+        composed, source = compose_with_llm(profile.profile_id, user_msg, deterministic)
+
 
     # Step 6: validate LLM output
     vr: ValidationResult = validate(
