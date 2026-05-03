@@ -32,6 +32,39 @@ def _load_prompts() -> None:
 _load_prompts()
 
 
+# ── OpenRouter (Claude Haiku — primary when OPENROUTER_API_KEY is set) ────────
+def _call_openrouter(profile_id: str, user_msg: str, timeout: float = 20.0) -> dict[str, Any] | None:
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+    system_prompt = _PROMPT_CACHE.get(profile_id, _PROMPT_CACHE.get("planning_curiosity", ""))
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+            timeout=timeout,
+            default_headers={"HTTP-Referer": "https://vera.app", "X-Title": "Vera"},
+        )
+        resp = client.chat.completions.create(
+            model="anthropic/claude-3-haiku",
+            temperature=0,
+            response_format={"type": "json_object"},
+            max_tokens=512,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
+            ],
+        )
+        result = _extract_json(resp.choices[0].message.content or "")
+        if result and result.get("body"):
+            return result
+    except Exception as e:
+        print(f"[llm_client] OpenRouter error: {e}")
+    return None
+
+
 # ── Anthropic (Claude Sonnet) ─────────────────────────────────────────────────
 def _call_anthropic(profile_id: str, user_msg: str, timeout: float = 25.0) -> dict[str, Any] | None:
     api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -201,9 +234,10 @@ def compose_with_llm(
     Returns (composed_dict, source) where source is "anthropic"|"gemini"|"openai"|"deterministic".
     """
     providers = [
-        ("anthropic", _call_anthropic),  # first — Claude Sonnet (best quality + cached prompts)
-        ("gemini", _call_gemini),        # second — Gemini when Anthropic key absent
-        ("openai", _call_openai),        # third fallback
+        ("openrouter", _call_openrouter),  # first — Claude Haiku via OpenRouter (fast + cheap)
+        ("anthropic", _call_anthropic),    # second — direct Anthropic key if set
+        ("gemini", _call_gemini),          # third — Gemini 2.5-flash
+        ("openai", _call_openai),          # last fallback
     ]
 
     for name, fn in providers:

@@ -106,20 +106,25 @@ def _deterministic_body(
         source = clean(anchor.get("digest_source", ""))
         n = anchor.get("digest_n")
         n_str = f" ({n}-patient trial)" if n else ""
+        source_str = f" ({source})" if source else ""
         if title:
-            return f"{name}, {title}{n_str}. Relevant to your patients. Want me to pull the full abstract?"
-        return f"{name}, a new category study just landed. Relevant for your practice. Want me to share it?"
+            return (
+                f"{name}, {title}{n_str}{source_str}. "
+                f"Want me to send you the full abstract + protocol notes?"
+            )
+        return f"{name}, a new category study just landed. Want me to send you the key findings?"
 
     if kind == "recall_due":
         customer = ctx.customer_name or "this patient"
         service = clean(anchor.get("service_due", "checkup")).replace("_", " ")
         slots = anchor.get("slots") or []
-        slot_str = f" Slots: {slots[0]['label']}" if slots else ""
+        slot_str = f" Next slot: {slots[0]['label']}." if slots else ""
         offer = ctx.active_offer
         offer_str = f" {offer}." if offer else ""
         return (
-            f"Hi {customer}, it's time for your {service} at {name}.{slot_str}{offer_str} "
-            f"Reply YES to confirm."
+            f"Hi {customer}, it's time for your {service} at {name}."
+            f"{slot_str}{offer_str} "
+            f"Reply YES to confirm — Dr. {name.split()[0] if name else 'us'} has reserved a spot for you."
         )
 
     if kind == "competitor_opened":
@@ -270,9 +275,10 @@ def _deterministic_body(
         title = clean(anchor.get("digest_title", "new regulation"))
         deadline = anchor.get("deadline", "")
         deadline_str = f" Deadline: {deadline[:10]}." if deadline else ""
+        deadline_cta = f" before {deadline[:10]}" if deadline else ""
         return (
             f"{name}, important update — {title}.{deadline_str} "
-            f"Want me to walk you through what changes you need to make?"
+            f"Want me to walk you through what changes before{deadline_cta}?"
         )
 
     if kind == "cde_opportunity":
