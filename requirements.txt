@@ -1,3 +1,10 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
+pydantic>=2.0
+httpx>=0.27.0              # async self-ping keep-alive
+python-dotenv>=1.0.0       # loads .env file automatically
 
+# LLM providers (install at least one for LLM composition; all are optional)
+anthropic>=0.25.0          # primary — Claude Sonnet with prompt caching
+google-genai>=1.0.0         # fallback — Gemini 2.0 Flash (new SDK)
+openai>=1.0.0              # second fallback — GPT-4o-mini

@@ -1,7 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import os
 import time
 from typing import Any
+
+# Load .env file (if present) — must happen before any os.getenv() calls
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv is optional; keys can still be set via shell env vars
 
 from fastapi import FastAPI, Response
 from pydantic import BaseModel, Field
@@ -20,9 +29,25 @@ from app.store import (
     store,
 )
 
-app = FastAPI(title="Vera Deterministic Bot", version="1.0.0")
+app = FastAPI(title="Vera Hybrid Engine", version="2.0.0")
 STARTED_AT = time.time()
 fallback = DatasetFallback()
+
+
+async def _keep_alive() -> None:
+    """Self-ping every 8 min to prevent free-tier sleep on Render/Railway."""
+    import httpx
+    url = os.getenv("PUBLIC_URL", "").rstrip("/")
+    if not url:
+        return  # local dev — no ping needed
+    await asyncio.sleep(60)  # wait 1 min after startup before first ping
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.get(f"{url}/v1/healthz")
+        except Exception:
+            pass  # silent — never crash the server
+        await asyncio.sleep(480)  # 8 minutes
 
 
 @app.on_event("startup")
@@ -37,6 +62,8 @@ async def preload_seed() -> None:
         for context_id, payload in source.items():
             if context_id not in store[scope]:
                 store[scope][context_id] = {"version": 0, "payload": payload, "delivered_at": None}
+    # Start keep-alive background task
+    asyncio.create_task(_keep_alive())
 
 
 class ContextBody(BaseModel):
@@ -74,13 +101,19 @@ async def healthz() -> dict[str, Any]:
 @app.get("/v1/metadata")
 async def metadata() -> dict[str, Any]:
     return {
-        "team_name": "Veera Deterministic Backend",
+        "team_name": "Veera Hybrid Engine",
         "team_members": ["Jagadish"],
-        "model": "none - deterministic rules/templates",
-        "approach": "FastAPI in-memory context store with grounded trigger templates and reply state machine",
+        "model": "claude-sonnet-4-6 (primary) | gemini-2.0-flash (fallback) | deterministic (safety net)",
+        "approach": (
+            "5-layer hybrid: signal_classifier (26 triggers → 8 profiles, pure Python) → "
+            "context_distiller (4-context → DistilledContext, ~300 tokens) → "
+            "LLM composer (Claude Sonnet with cached prompts) → "
+            "validator (anti-hallucination, URL, taboo, send_as) → "
+            "deterministic fallback (always-available templates)"
+        ),
         "contact_email": "not-provided@example.com",
-        "version": "1.0.0",
-        "submitted_at": "2026-05-02T00:00:00Z",
+        "version": "2.0.0",
+        "submitted_at": "2026-05-03T00:00:00Z",
     }
 
 
@@ -192,6 +225,10 @@ async def tick(body: TickBody) -> dict[str, Any]:
                 "cta": composed["cta"],
                 "suppression_key": composed["suppression_key"],
                 "rationale": composed["rationale"],
+                # Debug fields — composer source and profile used
+                "_source": composed.get("_source", "unknown"),
+                "_profile": composed.get("_profile", "unknown"),
+                "_validation_passed": composed.get("_validation_passed", True),
             }
         )
 
